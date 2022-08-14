@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+import sys
+import os, errno
+
+import numpy as np
+
+
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
+print(sys.path)
+
+import argparse
+import collections
+from math import log
+from math import exp
+import csv
+import operator
+import fastaparser
+import logging
+from check_circular import check_circular
+import torch
+from torch import nn,optim
+from torch.autograd import Variable
+from torch.utils.data import DataLoader, Dataset, TensorDataset
+
+def parse_args(args):
+###### Command Line Argument Parser
+    parser = argparse.ArgumentParser(description="Deep learning-based metagenomic identification script")
+    parser._action_groups.pop()
+    required_args = parser.add_argument_group('required arguments')
+    required_args.add_argument('-f', required = True, help='Input fasta file')
+    required_args.add_argument('-o', required = True, help='Output directory')
+    required_args.add_argument('--hmm', help='Path to HMM database')  
+    if len(sys.argv)==1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
+
+    return parser.parse_args()
+
+
+
+from CNN_tran_position import SeqDataset, TextCNN, category_from_output
+from data import domain,alphabet 
+
+
+def get_table_from_tblout(tblout_pfam):
+    with open(tblout_pfam, "r") as infile:
+        tblout_pfam=infile.readlines()
+   
+    tblout_pfam = [i.split() for i in tblout_pfam[3:-10]]
+    for i in tblout_pfam:
+        i[13] = float(i[13])
+
+    tblout_pfam.sort(key = operator.itemgetter(0, 13,17), reverse = True)
+
+    top_genes={}
+    for i in tblout_pfam:
+        if float(i[6]) <= 1e-06:
+            if i[0] not in top_genes:
+                top_genes[i[0]] = [[i[3],float(i[13]),float(i[17]),float(i[18])]]
+            else:
+                for j in top_genes[i[0]]:
+                    start_i, end_i, start_j, end_j = float(i[17]), float(i[18]), float(j[2]), float(j[3])
+                 
+                    if not ((end_i <= start_j) or (start_i >= end_j)):
+                        break
+                    else: 
+                        top_genes[i[0]].append([i[3],float(i[13]),start_i,end_i])
+                        break
+
+
+    contigs = collections.OrderedDict()
+    for i in top_genes:
+        name = i.rsplit("_", 1)[0]
+        if name not in contigs:
+            contigs[name] = set()
+            for i in top_genes[i]:
+                contigs[name].add(i[0])
+        else:
+            for i in top_genes[i]:  
+                contigs[name].add(i[0])
+
+    out = []
+    for key, value in contigs.items():
+        out+=[str(key) + " "  +  " ".join(value)]
+
+    
+  
+
+    return out
+
+
+def cnn_predict(input_list, unc_score):
+
+    out_list=[]
+    data_all=[]
+    for i in input_list:
+        contig=i[0]
+        sentence=i[1]
+        words=sentence.split()
+        for w in words:
+            if w not in domain:
+                words.remove(w)      
+        words = np.array([alphabet.get(c,-1)+1 for c in words], dtype=np.int32)
+        # words_new=[]
+        label = np.array(3, dtype = np.int8)
+        data_all.append(dict(contig=contig, words = words, label = label))
+    print("data_all:",len(data_all))
+    testDataset = SeqDataset(data_all)
+    testloader = DataLoader(testDataset, batch_size = 8, shuffle = False,collate_fn=testDataset.collate_fn)
+    model = TextCNN(128, 3)#embedding_size  depth
+    model.load_state_dict(torch.load('./model/1/_acc_.pth'))  
+    for i, batchData in enumerate(testloader):
+        x2 = batchData['words']
+        y_pre = model(x2) 
+        y_batch_lable =np.array(category_from_output(y_pre)) 
+        for j in range(len(y_batch_lable)):
+            if y_batch_lable[j]==0:
+                out_list.append("Virus")
+            elif y_batch_lable[j]==1:
+                out_list.append("bacteria")
+            elif y_batch_lable[j]==2:
+                out_list.append("plasmid")
+    print("out_list:",len(out_list))
+
+        
+    return out_list 
+
+
+
+
+
+def main():
+
+    args = parse_args(sys.argv[1:])
+    base = os.path.basename(args.f)
+    name_file = os.path.splitext(base)[0]
+    dirname = os.path.dirname(__file__)
+    outdir = args.o
+    
+    try:
+        os.makedirs(outdir)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+
+    if not os.path.exists(outdir + "/Prediction_results_fasta/"):
+        os.mkdir(outdir + "/Prediction_results_fasta/")
+    res_path = outdir + "/Prediction_results_fasta/" +  name_file
+    open (f"{res_path}_virus.fasta", "a").close() 
+    open (f"{res_path}_plasmid.fasta", "a").close() 
+    open (f"{res_path}_bacteria.fasta", "a").close() 
+
+
+
+    logging.basicConfig(filename=outdir + "/dlmeta.log",level=logging.INFO, format='%(asctime)s %(message)s',datefmt="%Y-%m-%d %H:%M:%S")
+    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
+    logging.info(f"dlmeta started as: \n {' '.join(sys.argv)}")
+    
+
+
+    name = os.path.join(outdir, name_file)
+    
+    ids = []
+    with open(args.f, "r") as ins:
+        for line in ins:
+            if line[0]==">":
+                ids.append(line.split()[0][1:])
+    
+    if args.hmm:
+        hmm = args.hmm
+    else:
+        logging.info(f"No HMM database provided")
+        exit(1)    
+    
+    
+    if args.db:
+        from parse_blast_xml import parser
+        blastdb = args.db
+    
+    if args.t:
+        threads = str(args.t)
+    else:
+        threads = str(20)
+
+    if args.thr:
+        threshold = int(args.thr)
+    else:
+        threshold = 7 
+    
+
+    # Check for circular:   
+    contig_len_circ = check_circular(args.f, name)
+    infile_circ = name + "_input_with_circ.fasta"
+
+    # Run gene prediction
+    logging.info(f"Gene prediction...")
+    res = os.system ("prodigal -p meta -c -i " + infile_circ + " -a "+name+"_proteins.fa -o "+name+"_genes.fa 2>"+name+"_prodigal.log" )
+    if res != 0:
+        print ("Prodigal run failed")
+        logging.info(f"Prodigal run failed")
+        exit(1)    
+
+    # Filter genes predicted over the end of the contig
+  
+    proteins = fastaparser.read_fasta(name+"_proteins.fa")
+    with open(name+"_proteins_circ.fa", 'w') as protein_output:
+      for i in proteins:
+        contig_name = i[0].split()[0].rsplit("_",1)[0][1:]
+        gene_start = i[0].split("#")[1]
+        if int(gene_start.strip()) < int((contig_len_circ[contig_name][0])):
+          protein_output.write(i[0]+"\n")
+          protein_output.write(i[1]+"\n")
+
+   # HMM search
+
+    logging.info(f"HMM domains prediction...")
+    res = os.system ("hmmsearch  --noali --cut_nc  -o "+name+"_out_pfam --domtblout "+name+"_domtblout --cpu "+ threads + " " + hmm + " "+name+"_proteins_circ.fa")
+    if res != 0:
+        print ("hmmsearch run failed")
+        exit(1)  
+
+    logging.info(f"Parsing...")
+    tblout_pfam= name + "_domtblout" 
+
+
+    feature_table = get_table_from_tblout(tblout_pfam) 
+    feature_table = [i.strip().split(' ', 1) for i in feature_table]
+    
+    with open(name + '_feature_table.txt', 'w') as output:
+        writer = csv.writer(output, lineterminator='\n')
+        writer.writerows(feature_table)
+    
+    #print(feature_table)
+    
+    feature_table_names=[]
+    feature_table_genes=[]
+    for i in feature_table:
+          feature_table_names.append(i[0])
+          feature_table_genes.append(i[1])
+    
+    
+
+    logging.info(f"Classification...")
+
+    t=feature_table
+    print("@@@@@@@@@")
+    print(t)
+    print("t",len(t))
+
+
+    k = cnn_predict(t, threshold) 
+
+
+    names_result={}
+    for i in range (0,len(k)):
+        names_result[feature_table_names[i]] = [k[i],feature_table_genes[i]]    
+
+
+    
+
+                    
+    final_table=collections.OrderedDict()
+
+    for i in ids: 
+        final_table[i] = [names_result[i][0], contig_len_circ[i][0], contig_len_circ[i][1],names_result[i][1]]
+    
+
+    if args.db:
+        
+        logging.info(f"Running BLAST...")
+        os.system ("blastn  -query " + args.f + " -db " + blastdb + " -evalue 0.0001 -outfmt \"6 qseqid evalue qcovs pident stitle \" -out "+name+".blastn -num_threads "+threads+" -num_alignments 1")
+        logging.info(f"Parsing BLAST...")
+        blast_results = {}
+        for line in open (name+".blastn"):
+            items = line.strip().split("\t")
+            blast_results[items[0]]=items[1:]
+        for i in final_table:
+            if i in blast_results:
+                final_table[i]+=blast_results[i]
+            else:
+                final_table[i]+=["No BLAST hits"]
+    
+    
+    result_file = name + "_result_table.csv"  
+    with open(result_file, 'w') as output:
+        writer = csv.writer(output, lineterminator='\n')
+        if args.db:
+            writer.writerow(["Contig name", "Prediction", "Length","Circular","Pfam hits","E-value","Query coverage","Identity","Hit name"])
+        else:
+            writer.writerow(["Contig name", "Prediction", "Length","Circular","Pfam hits"])            
+        for i in final_table:
+          writer.writerow([i] + final_table[i])
+    
+    if not os.path.exists(outdir + "/Prediction_results_fasta/"):
+        os.mkdir(outdir + "/Prediction_results_fasta/")
+
+
+    res_path = outdir + "/Prediction_results_fasta/" +  name_file
+    with open (f"{res_path}_virus.fasta", "w") as vir_file, \
+        open (f"{res_path}_plasmid.fasta", "w") as plasmid_file, \
+        open (f"{res_path}_bacteria.fasta", "w") as chrom_file:
+
+
+        if args.p:
+            outfile_dict = {"Virus": vir_file, "plasmid": plasmid_file, "bacteria": chrom_file} 
+        else:
+            outfile_dict = {"Virus": vir_file, "plasmid": chrom_file, "bacteria": chrom_file} 
+            os.remove(str(f"{res_path}_plasmid.fasta"))
+
+        contigs = fastaparser.read_fasta(args.f)
+        for i in contigs:
+            contig_name = i[0].split(" ")[0][1:]
+            if final_table[contig_name][0] in outfile_dict:
+                outfile_dict[final_table[contig_name][0]].write(i[0]+"\n")
+                outfile_dict[final_table[contig_name][0]].write(i[1]+"\n")
+
+    logging.info(f"Done!")
+    logging.info(f"Results can be found in {os.path.abspath(result_file)}")
+
+    
+    
+
+if __name__ == "__main__":
+    main()
+
