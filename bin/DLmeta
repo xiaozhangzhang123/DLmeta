@@ -38,8 +38,8 @@ def parse_args(args):
 
 
 
-from CNN_tran_position import SeqDataset, TextCNN, category_from_output
-from data import domain,alphabet 
+from model_training import SeqDataset, TextCNN, category_from_output
+from words_library import domain,alphabet 
 
 
 def get_table_from_tblout(tblout_pfam):
@@ -89,7 +89,7 @@ def get_table_from_tblout(tblout_pfam):
     return out
 
 
-def cnn_predict(input_list, unc_score):
+def cnn_predict(input_list):
 
     out_list=[]
     data_all=[]
@@ -101,14 +101,12 @@ def cnn_predict(input_list, unc_score):
             if w not in domain:
                 words.remove(w)      
         words = np.array([alphabet.get(c,-1)+1 for c in words], dtype=np.int32)
-        # words_new=[]
         label = np.array(3, dtype = np.int8)
         data_all.append(dict(contig=contig, words = words, label = label))
-    print("data_all:",len(data_all))
     testDataset = SeqDataset(data_all)
     testloader = DataLoader(testDataset, batch_size = 8, shuffle = False,collate_fn=testDataset.collate_fn)
     model = TextCNN(128, 3)#embedding_size  depth
-    model.load_state_dict(torch.load('./model/1/_acc_.pth'))  
+    model.load_state_dict(torch.load('../model/1/_acc_.pth'))  
     for i, batchData in enumerate(testloader):
         x2 = batchData['words']
         y_pre = model(x2) 
@@ -120,7 +118,7 @@ def cnn_predict(input_list, unc_score):
                 out_list.append("bacteria")
             elif y_batch_lable[j]==2:
                 out_list.append("plasmid")
-    print("out_list:",len(out_list))
+
 
         
     return out_list 
@@ -143,12 +141,6 @@ def main():
         if e.errno != errno.EEXIST:
             raise
 
-    if not os.path.exists(outdir + "/Prediction_results_fasta/"):
-        os.mkdir(outdir + "/Prediction_results_fasta/")
-    res_path = outdir + "/Prediction_results_fasta/" +  name_file
-    open (f"{res_path}_virus.fasta", "a").close() 
-    open (f"{res_path}_plasmid.fasta", "a").close() 
-    open (f"{res_path}_bacteria.fasta", "a").close() 
 
 
 
@@ -173,19 +165,10 @@ def main():
         exit(1)    
     
     
-    if args.db:
-        from parse_blast_xml import parser
-        blastdb = args.db
-    
-    if args.t:
-        threads = str(args.t)
-    else:
-        threads = str(20)
 
-    if args.thr:
-        threshold = int(args.thr)
-    else:
-        threshold = 7 
+    
+
+        
     
 
     # Check for circular:   
@@ -214,6 +197,7 @@ def main():
    # HMM search
 
     logging.info(f"HMM domains prediction...")
+    threads = str(20)
     res = os.system ("hmmsearch  --noali --cut_nc  -o "+name+"_out_pfam --domtblout "+name+"_domtblout --cpu "+ threads + " " + hmm + " "+name+"_proteins_circ.fa")
     if res != 0:
         print ("hmmsearch run failed")
@@ -230,7 +214,6 @@ def main():
         writer = csv.writer(output, lineterminator='\n')
         writer.writerows(feature_table)
     
-    #print(feature_table)
     
     feature_table_names=[]
     feature_table_genes=[]
@@ -243,12 +226,9 @@ def main():
     logging.info(f"Classification...")
 
     t=feature_table
-    print("@@@@@@@@@")
-    print(t)
-    print("t",len(t))
 
 
-    k = cnn_predict(t, threshold) 
+    k = cnn_predict(t) 
 
 
     names_result={}
@@ -262,58 +242,18 @@ def main():
     final_table=collections.OrderedDict()
 
     for i in ids: 
-        final_table[i] = [names_result[i][0], contig_len_circ[i][0], contig_len_circ[i][1],names_result[i][1]]
-    
-
-    if args.db:
+        if i in names_result:
+            final_table[i] = [names_result[i][0], contig_len_circ[i][0], contig_len_circ[i][1],names_result[i][1]]
         
-        logging.info(f"Running BLAST...")
-        os.system ("blastn  -query " + args.f + " -db " + blastdb + " -evalue 0.0001 -outfmt \"6 qseqid evalue qcovs pident stitle \" -out "+name+".blastn -num_threads "+threads+" -num_alignments 1")
-        logging.info(f"Parsing BLAST...")
-        blast_results = {}
-        for line in open (name+".blastn"):
-            items = line.strip().split("\t")
-            blast_results[items[0]]=items[1:]
-        for i in final_table:
-            if i in blast_results:
-                final_table[i]+=blast_results[i]
-            else:
-                final_table[i]+=["No BLAST hits"]
     
     
     result_file = name + "_result_table.csv"  
     with open(result_file, 'w') as output:
         writer = csv.writer(output, lineterminator='\n')
-        if args.db:
-            writer.writerow(["Contig name", "Prediction", "Length","Circular","Pfam hits","E-value","Query coverage","Identity","Hit name"])
-        else:
-            writer.writerow(["Contig name", "Prediction", "Length","Circular","Pfam hits"])            
+        writer.writerow(["Contig name", "Prediction", "Length","Circular","Pfam hits"])            
         for i in final_table:
           writer.writerow([i] + final_table[i])
     
-    if not os.path.exists(outdir + "/Prediction_results_fasta/"):
-        os.mkdir(outdir + "/Prediction_results_fasta/")
-
-
-    res_path = outdir + "/Prediction_results_fasta/" +  name_file
-    with open (f"{res_path}_virus.fasta", "w") as vir_file, \
-        open (f"{res_path}_plasmid.fasta", "w") as plasmid_file, \
-        open (f"{res_path}_bacteria.fasta", "w") as chrom_file:
-
-
-        if args.p:
-            outfile_dict = {"Virus": vir_file, "plasmid": plasmid_file, "bacteria": chrom_file} 
-        else:
-            outfile_dict = {"Virus": vir_file, "plasmid": chrom_file, "bacteria": chrom_file} 
-            os.remove(str(f"{res_path}_plasmid.fasta"))
-
-        contigs = fastaparser.read_fasta(args.f)
-        for i in contigs:
-            contig_name = i[0].split(" ")[0][1:]
-            if final_table[contig_name][0] in outfile_dict:
-                outfile_dict[final_table[contig_name][0]].write(i[0]+"\n")
-                outfile_dict[final_table[contig_name][0]].write(i[1]+"\n")
-
     logging.info(f"Done!")
     logging.info(f"Results can be found in {os.path.abspath(result_file)}")
 

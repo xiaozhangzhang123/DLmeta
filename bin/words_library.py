@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset, TensorDataset
 
 #alphabet
 data = []
-with open(".data/viral.txt") as f:
+with open("../data/viral.txt") as f:
     for l in f.readlines():
         l = l.strip()
         contig = l.split(',')[0]
@@ -20,7 +20,7 @@ with open(".data/viral.txt") as f:
         label = np.array(0, dtype = np.int8)
         data.append(dict(contig=contig, words = words, label = label))
 
-with open("./data/bacteria.txt") as f:
+with open("../data/bacteria.txt") as f:
     for l in f.readlines():
         l = l.strip()
         contig = l.split(',')[0]
@@ -29,7 +29,7 @@ with open("./data/bacteria.txt") as f:
         label = np.array(1, dtype = np.int8)
         data.append(dict(contig=contig, words = words, label = label))
 
-with open("./data/plasmid.txt") as f:
+with open("../data/plasmid.txt") as f:
     for l in f.readlines():
         l = l.strip()
         contig = l.split(',')[0]
@@ -50,7 +50,6 @@ for i in data:
 
 alphabet = {c: i for i, c in enumerate(domain)}  
 
-print(len(alphabet))
 
 class SeqDataset(Dataset):
     def __init__(self, inputData):
@@ -121,7 +120,7 @@ if __name__ == '__main__':
 
     data_all = []
 
-    with open("./data/viral.txt") as f:
+    with open("../data/viral.txt") as f:
         for l in f.readlines():
             l = l.strip()
             contig = l.split(',')[0] 
@@ -131,7 +130,7 @@ if __name__ == '__main__':
             label = np.array(0, dtype = np.int8)
             data_all.append(dict(contig=contig, words = words, label = label))
 
-    with open("./data/bacteria.txt") as f:
+    with open("../data/bacteria.txt") as f:
         for l in f.readlines():
             l = l.strip()
             contig = l.split(',')[0] 
@@ -141,7 +140,7 @@ if __name__ == '__main__':
             label = np.array(1, dtype = np.int8)
             data_all.append(dict(contig=contig, words = words, label = label))
 
-    with open("./data/plasmid.txt") as f:
+    with open("../data/plasmid.txt") as f:
         for l in f.readlines():
             l = l.strip()
             contig = l.split(',')[0] 
@@ -153,11 +152,11 @@ if __name__ == '__main__':
 
     print("data_all_num:",len(data_all))
 
-    with open('./data/all.pkl', 'wb') as f: 
+    with open('../data/all.pkl', 'wb') as f: 
         pickle.dump(data_all,f)
 
 
-    with open('./data/all.pkl','rb') as f:
+    with open('../data/all.pkl','rb') as f:
         all_data = pickle.load(f)
 
 
@@ -174,9 +173,9 @@ if __name__ == '__main__':
     for t2 in test_index:
         test.append(all_data[t2])
 
-    with open('./data/train.pkl', 'wb') as f: 
+    with open('../data/train.pkl', 'wb') as f: 
         pickle.dump(train,f)
 
-    with open('./data/test.pkl', 'wb') as f:
+    with open('../data/test.pkl', 'wb') as f:
         pickle.dump(test,f)
 

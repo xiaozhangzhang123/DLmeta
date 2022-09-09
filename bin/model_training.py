@@ -51,7 +51,6 @@ print("#time:", time_sign)
 
 
 vocab_size=7897#the number of training data
-print(vocab_size)
 max_seq_len=2000
 
 all_categories=['viral','bacteria','plasmid']
@@ -78,7 +77,6 @@ class SeqDataset(Dataset):
         for i, x in enumerate(inputData):
             x_contig = x['contig']
             x_words = np.array(x['words'])
-            # print("x_len:")
             x_length=x_words.size
             x_label = np.array(x['label'])
             x_words = x_words.astype(np.int64)
@@ -137,10 +135,10 @@ class SeqDataset(Dataset):
         return  {'words':output, 'label':out_label,'length':out_length,'contig':out_contig}
 
 
-with open('./data/train.pkl','rb') as f:
+with open('../data/train.pkl','rb') as f:
     train = pickle.load(f)
 
-with open('./data/test.pkl','rb') as f:
+with open('../data/test.pkl','rb') as f:
     test = pickle.load(f)
 
 trainDataset = SeqDataset(train)
